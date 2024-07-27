@@ -21,7 +21,7 @@ class Parser:
         self.current_output = rest # this is like popping 'not rest' from the stack
         self.current_output.append(reduced)
 
-    def lex(self, string):
+    def parse(self, string):
         self.current_output = []
         self.remaining_input = list(reversed(string))
         self.lookahead = self.remaining_input.pop()
@@ -210,7 +210,7 @@ def main():
         s = input(arrowed("?", '', c_bang, '') + ' ')
         if s == '·': break
         try:
-            succ = l.lex(s)
+            succ = l.parse(s)
             print(arrowed('!', '', c_success, ''), colored(succ, c_success, ''))
         except Exception as e:
             print(arrowed('!', '', c_error, ''), colored(e, c_error, ''))
