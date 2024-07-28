@@ -43,7 +43,7 @@ class Color:
 
         return f"\033[{n};2;{self.red};{self.green};{self.blue}m"
 
-def colored(string: str, f: Color | Literal[''], b: Color | Literal['']):
+def colored(string: str, f: Color | Literal['']= '', b: Color | Literal['']= ''):
     if f != '': f = f.foreground()
     if b != '': b = b.background()
     return f"{f}{b}{string}{OFF}"
@@ -51,7 +51,7 @@ def colored(string: str, f: Color | Literal[''], b: Color | Literal['']):
 def arrow(f: Color | Literal[''], b: Color | Literal['']):
     return colored(ARROW_GLYPH, f, b)
 
-def arrowed(string, before: Color | Literal[''], now: Color | Literal[''], after: Color | Literal['']):
+def arrowed(string, before: Color | Literal['']= '', now: Color | Literal['']= '', after: Color | Literal['']= ''):
     pre = INVERT + arrow(now, before) # cursed
     content = colored(' ' + string + ' ', '', now.background())
     post = arrow(now, after)

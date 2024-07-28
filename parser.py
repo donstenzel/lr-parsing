@@ -1,7 +1,13 @@
-import functools
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 from ansi import Color, arrow, colored
+
+VALID = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-*/^ ,:"
+
+
+def indent(string: str):
+    return '\n'.join("| " + line for line in string.split('\n'))
 
 class Parser:
 
@@ -69,33 +75,37 @@ class Parser:
                 case [*rest, Expression() as l, '^', Expression() as r]:
                     match self.lookahead:
                         case '^': self.shift()
-                        case  _ : self.reduce(rest, Binary(l, '^', r))
+                        case _: self.reduce(rest, Binary(l, '^', r))
 
-                case [*rest, Expression() as l, '*', Expression() as r]:
+                case [*rest, Expression() as l, '*' | '/' as op, Expression() as r]:
                     match self.lookahead:
                         case '^': self.shift()
-                        case  _ : self.reduce(rest, Binary(l, '*', r))
+                        case _: self.reduce(rest, Binary(l, op, r))
 
-                case [*rest, Expression() as l, '+', Expression() as r]:
+                case [*rest, Expression() as l, '+' | '-' as op, Expression() as r]:
                     match self.lookahead:
-                        case '*': self.shift()
-                        case  _ : self.reduce(rest, Binary(l, '+', r))
+                        case '*' | '/' | '^': self.shift()
+                        case _: self.reduce(rest, Binary(l, op, r))
 
-                case [*rest, Expression() as e1, Expression() as e2]:
-                    self.reduce(rest, Expressions([e1, e2]))
+                case [*rest, Expression() | Declaration() as e1, Expression() | Declaration() as e2]:
+                    match self.lookahead:
+                        case '(' | ')' | '+' | '-' | '*' | '/' | '^' | '=': self.shift()
+                        case _: self.reduce(rest, Block([e1, e2]))
 
-                case [*rest, Expressions(es), Expression() as e]:
-                    self.reduce(rest, Expressions([*es, e]))
+                case [*rest, Block(es), Expression() | Declaration() as e]:
+                    self.reduce(rest, Block([*es, e]))
 
-                # case [*rest, TypedIdentifier(_, _) as t]:
-                #     if self.lookahead == ',': self.shift()
-                #     else: self.reduce(rest, TypedIdentifiers([t]))
+                case [*rest, Expression() as e1, ',', Expression() as e2]:
+                    self.reduce(rest, Arguments([e1, e2]))
 
-                case [*rest, TypedIdentifier(_, _) as t1, ',', TypedIdentifier(_, _) as t2]:
-                    self.reduce(rest, TypedIdentifiers([t1, t2]))
+                case [*rest, Arguments(args), ',', Expression() as arg]:
+                    self.reduce(rest, Arguments([*args, arg]))
 
-                case [*rest, TypedIdentifiers(ts), ',', TypedIdentifier(_, _) as t]:
-                    self.reduce(rest, TypedIdentifiers([*ts, t]))
+                case [*rest, TypedIdentifier(_, _) | Identifier(_) as t1, ',', TypedIdentifier(_, _) | Identifier(_) as t2]:
+                    self.reduce(rest, Parameters([t1, t2]))
+
+                case [*rest, Parameters(ts), ',', TypedIdentifier(_, _) | Identifier(_) as t]:
+                    self.reduce(rest, Parameters([*ts, t]))
 
                 case [*rest, Keyword("var"), Identifier(i), '=', Expression() as e]:
                     self.reduce(rest, Variable(i, e))
@@ -103,16 +113,72 @@ class Parser:
                 case [*rest, Keyword("val"), Identifier(i), '=', Expression() as e]:
                     self.reduce(rest, Value(i, e))
                 
-                case [*rest, Keyword("fun"), '(', TypedIdentifiers(_) | TypedIdentifier(_, _) as t, ')', '{', Expressions(_) | Expression() as e, '}']:
-                    self.reduce(rest, Function(t, e))
+                case [*rest, Keyword("fun"), '(', Parameters(_) as p, ')', '{', Block(_) as b, '}']:
+                    self.reduce(rest, AnonymousFunction(p, b))
 
-                case [*rest, Identifier(_) | Function(_, _) as f, '(', Expressions(_) | Expression() as e, ')']:
-                    self.reduce(rest, Application(f, e))
+                case [*rest, Keyword("fun"), '(', Identifier(_) | TypedIdentifier(_, _) as p, ')', '{', Block(_) as b, '}']:
+                    self.reduce(rest, AnonymousFunction(Parameters([p]), b))
+
+                case [*rest, Keyword("fun"), '(', ')', '{', Block(_) as b, '}']:
+                    self.reduce(rest, AnonymousFunction(Parameters([]), b))
+
+                case [*rest, Keyword("fun"), '(', Parameters(_) as p, ')', '{', Expression() as e, '}']:
+                    self.reduce(rest, AnonymousFunction(p, Block([e])))
+
+                case [*rest, Keyword("fun"), '(', Identifier(_) | TypedIdentifier(_, _) as p, ')', '{', Expression() as e, '}']:
+                    self.reduce(rest, AnonymousFunction(Parameters([p]), Block([e])))
+
+                case [*rest, Keyword("fun"), '(', ')', '{', Block(_) | Expression() as e, '}']:
+                    self.reduce(rest, AnonymousFunction(Parameters([]), Block([e])))
+
+                case [*rest, Keyword("fun"), '(', Parameters(_) as p, ')', '{', '}']:
+                    self.reduce(rest, AnonymousFunction(p, Block([])))
+
+                case [*rest, Keyword("fun"), '(', Identifier(_) | TypedIdentifier(_, _) as p, ')', '{', '}']:
+                    self.reduce(rest, AnonymousFunction(Parameters([p]), Block([])))
+
+                case [*rest, Keyword("fun"), '(', ')', '{', '}']:
+                    self.reduce(rest, AnonymousFunction(Parameters([]), Block([])))
+
+                case [*rest, Identifier(_) | Application(_, _) as f, '(', Arguments(_) as args, ')']:
+                    self.reduce(rest, Application(f, args))
+
+                case [*rest, Identifier(_) | Application(_, _) as f, '(', Expression() as e, ')']:
+                    self.reduce(rest, Application(f, Arguments([e])))
+
+                case [*rest, Identifier(_) | Application(_, _) as f, '(', ')']:
+                    self.reduce(rest, Application(f, Arguments([])))
 
                 case [*_]:
                     match self.lookahead:
                         case '': return self.current_output
                         case _: self.shift()
+
+@dataclass
+class Scope:
+    parent: Scope | None
+    members: dict[str, Expression]
+
+    def __contains__(self, item):
+        match item in self.members.keys():
+            case True: return True
+            case False: return False if self.parent is None else (item in self.parent)
+
+    def __getitem__(self, key):
+        match key in self.members.keys():
+            case True: return self.members[key]
+            case False:
+                if self.parent is None:
+                    raise Exception(f"{key} does not exist in this scope.")
+                return self.parent[key]
+
+    def __setitem__(self, key, value):
+        self.members[key] = value
+
+def eval(ast, scope):
+    match ast:
+        case Number(n): return n
+
 
 class Expression: pass
 
@@ -124,6 +190,9 @@ class Digit:
 class Number(Expression):
     n: int
 
+    def __repr__(self):
+        return str(self.n)
+
 @dataclass
 class Letter:
     l: str
@@ -131,6 +200,9 @@ class Letter:
 @dataclass
 class Identifier(Expression):
     i: str
+
+    def __repr__(self):
+        return self.i
 
 @dataclass
 class Keyword:
@@ -142,38 +214,81 @@ class Binary(Expression):
     op: str
     r: Expression
 
+    def __repr__(self):
+        return repr_treelike(self.op, [self.l, self.r])
+        # return '\n'.join([
+        #     self.op,
+        #     indent(self.l.__repr__()),
+        #     indent(self.r.__repr__())
+        #     ])
+
+
 @dataclass
 class TypedIdentifier:
     i: str
     t: str
 
-@dataclass
-class TypedIdentifiers:
-    ts: list[TypedIdentifier]
+    def __repr__(self):
+        return i + ": " + t
 
 @dataclass
-class Expressions:
-    es: list[Expression]
+class Parameters:
+    params: list[TypedIdentifier | Identifier]
+
+    def __repr__(self):
+        return repr_treelike("Parameters", self.params)
+        # return '\n'.join([
+        #     "Parameters",
+        #     *(indent(param.__repr__()) for param in self.params)
+        # ])
 
 @dataclass
-class Function(Expression):
-    params: TypedIdentifiers | TypedIdentifier
-    block: Expressions | Expression
+class Block:
+    es: list[Expression | Declaration]
+
+    def __repr__(self):
+        return repr_treelike("Block", self.es)
 
 @dataclass
-class Variable:
+class AnonymousFunction(Expression):
+    params: Parameters
+    block: Block
+
+@dataclass
+class Arguments:
+    args: list[Expression]
+
+@dataclass
+class Application(Expression):
+    fun: Identifier | Application
+    args: Arguments
+
+class Declaration: pass
+
+@dataclass
+class Variable(Declaration):
     n: str
     curr_v: Expression
 
 @dataclass
-class Value:
+class Value(Declaration):
     n: str
     v: Expression
 
 @dataclass
-class Application(Expression):
-    fun: Identifier | Function
-    args: Expressions | Expression
+class Function(Declaration):
+    n: str
+    params: Parameters
+    block: Block
+
+    def __repr__(self):
+        return repr_treelike("Function", [self.n, self.params, self.block])
+        # return '\n'.join([
+        #     "Function",
+        #     indent(self.n),
+        #     indent(self.params.__repr__()),
+        #     indent(self.block.__repr__())
+        # ])
 
 def padl(w: int, string: str, padding: str):
     current_w = len(string)
@@ -187,6 +302,11 @@ def padr(w: int, string: str, padding: str):
         d = w - current_w
         return string + padding * d
 
+def repr_treelike(label, entries):
+    return '\n'.join([
+        label,
+        *(indent(entry.__repr__()) for entry in entries)
+    ])
 
 def handled(f):
     def inner(*args, **kwargs):
@@ -197,6 +317,7 @@ def handled(f):
 
 
 def main():
+
     from ansi import Color, arrowed, colored
 
     c_error = Color(190, 20, 30)
@@ -204,17 +325,17 @@ def main():
     c_bang = Color(140, 20, 190)
 
 
-    l = Parser()
-    print(arrowed("welcome to bang! enter · to exit.", '', c_bang, ''))
+    parser = Parser()
+    print(arrowed("welcome to bang! enter · to exit.", now= c_bang))
     while True:
-        s = input(arrowed("?", '', c_bang, '') + ' ')
+        s = input(arrowed("?", now= c_bang) + ' ')
         if s == '·': break
         try:
-            succ = l.parse(s)
-            print(arrowed('!', '', c_success, ''), colored(succ, c_success, ''))
+            succ = parser.parse(s)
+            print(arrowed('!', now= c_success), colored(succ, f= c_success))
         except Exception as e:
-            print(arrowed('!', '', c_error, ''), colored(e, c_error, ''))
-    print(arrowed("Goodbye!", '', c_bang, ''))
+            print(arrowed('!', now= c_error), colored(e, f= c_error))
+    print(arrowed("Goodbye!", now= c_bang))
 
 if __name__ == "__main__":
     main()
